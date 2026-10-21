@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Calculadora WebSocket</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2029;
+      --border: #2c3542;
+      --text: #e6e9ee;
+      --muted: #8b96a5;
+      --accent: #8e1b3a;
+      --accent-hover: #a82248;
+      --ok: #3fb950;
+      --err: #f85149;
+      --send: #58a6ff;
+      --recv: #3fb950;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 24px 16px;
+    }
+    .wrap { max-width: 960px; margin: 0 auto; }
+    h1 { font-size: 1.5rem; margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 24px; font-size: .9rem; }
+    .grid { display: grid; grid-template-columns: 1fr 1.3fr; gap: 16px; }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+    }
+    .card h2 { font-size: 1rem; margin: 0 0 16px; }
+    .status { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; font-size: .9rem; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--err); }
+    .dot.on { background: var(--ok); }
+    label { display: block; font-size: .8rem; color: var(--muted); margin: 12px 0 4px; }
+    input, select {
+      width: 100%;
+      padding: 10px;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 1rem;
+    }
+    .row { display: flex; gap: 8px; margin-top: 16px; }
+    button {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      border-radius: 6px;
+      background: var(--accent);
+      color: #fff;
+      font-size: .95rem;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: var(--accent-hover); }
+    button.secondary { background: var(--border); }
+    button:disabled { opacity: .4; cursor: not-allowed; }
+    .result {
+      margin-top: 20px;
+      padding: 16px;
+      background: var(--bg);
+      border-radius: 6px;
+      text-align: center;
+      font-size: 2rem;
+      font-weight: 600;
+      min-height: 72px;
+    }
+    .result.error { color: var(--err); font-size: 1rem; }
+    .log {
+      height: 420px;
+      overflow-y: auto;
+      background: var(--bg);
+      border-radius: 6px;
+      padding: 12px;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: .8rem;
+      line-height: 1.5;
+    }
+    .log div { margin-bottom: 4px; word-break: break-all; }
+    .log .send { color: var(--send); }
+    .log .recv { color: var(--recv); }
+    .log .info { color: var(--muted); }
+    .log .error { color: var(--err); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Calculadora WebSocket</h1>
+    <p class="sub">Ejemplo práctico · Sistemas Distribuidos · RFC 6455</p>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Cliente</h2>
+        <div class="status"><span class="dot" id="dot"></span><span id="estado">Desconectado</span></div>
+
+        <div class="row" style="margin-top:0">
+          <button id="btnConectar">Conectar</button>
+          <button id="btnCerrar" class="secondary" disabled>Cerrar conexión</button>
+        </div>
+
+        <label for="a">Número a</label>
+        <input id="a" type="number" value="15" />
+        <label for="operacion">Operación</label>
+        <select id="operacion">
+          <option value="sumar">Sumar (+)</option>
+          <option value="restar">Restar (−)</option>
+          <option value="multiplicar">Multiplicar (×)</option>
+          <option value="dividir">Dividir (÷)</option>
+        </select>
+        <label for="b">Número b</label>
+        <input id="b" type="number" value="27" />
+
+        <div class="row">
+          <button id="btnCalcular" disabled>Calcular</button>
+        </div>
+
+        <div class="result" id="resultado">—</div>
+      </div>
+
+      <div class="card">
+        <h2>Registro de comunicación</h2>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let ws = null;
+
+    function log(texto, tipo = "info") {
+      const linea = document.createElement("div");
+      linea.className = tipo;
+      linea.textContent = `[${new Date().toLocaleTimeString()}] ${texto}`;
+      $("log").appendChild(linea);
+      $("log").scrollTop = $("log").scrollHeight;
+    }
+
+    function setConectado(on) {
+      $("dot").classList.toggle("on", on);
+      $("estado").textContent = on ? "Conectado (canal full-duplex activo)" : "Desconectado";
+      $("btnConectar").disabled = on;
+      $("btnCerrar").disabled = !on;
+      $("btnCalcular").disabled = !on;
+    }
+
+    // Fase 1: Handshake. El navegador envía el GET con Upgrade: websocket
+    // y Sec-WebSocket-Key; el servidor responde 101 Switching Protocols.
+    $("btnConectar").onclick = () => {
+      const url = `ws://${location.host}/ws`;
+      log(`Handshake: GET /ws  Upgrade: websocket → ${url}`);
+      ws = new WebSocket(url);
+
+      ws.onopen = () => {
+        log("101 Switching Protocols — conexión WebSocket activa");
+        setConectado(true);
+      };
+
+      // Fase 2 (respuesta): onmessage se dispara de forma asíncrona
+      ws.onmessage = (evento) => {
+        log(`← Frame texto (opcode 0x1, MASK=0): ${evento.data}`, "recv");
+        const datos = JSON.parse(evento.data);
+        const caja = $("resultado");
+        if (datos.status === "ok") {
+          caja.className = "result";
+          caja.textContent = Number.isInteger(datos.resultado)
+            ? datos.resultado
+            : datos.resultado.toFixed(4);
+        } else {
+          caja.className = "result error";
+          caja.textContent = datos.mensaje;
+        }
+      };
+
+      // Fase 3: Cierre
+      ws.onclose = (evento) => {
+        log(`Close frame recibido (opcode 0x8) código ${evento.code} ${evento.reason}`);
+        log("Socket TCP cerrado");
+        setConectado(false);
+      };
+
+      ws.onerror = () => log("Error en la conexión. ¿Está corriendo el servidor?", "error");
+    };
+
+    // Fase 2 (petición): serialización JSON. El navegador aplica
+    // automáticamente la máscara XOR de 4 bytes (MASK=1) al frame.
+    $("btnCalcular").onclick = () => {
+      const mensaje = {
+        operacion: $("operacion").value,
+        a: Number($("a").value),
+        b: Number($("b").value),
+      };
+      const json = JSON.stringify(mensaje);
+      ws.send(json);
+      log(`→ Frame texto (opcode 0x1, MASK=1): ${json}`, "send");
+    };
+
+    $("btnCerrar").onclick = () => {
+      log("→ Close frame (opcode 0x8) código 1000", "send");
+      ws.close(1000, "Fin de sesion");
+    };
+  </script>
+</body>
+</html>

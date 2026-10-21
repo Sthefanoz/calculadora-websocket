@@ -1,0 +1,10 @@
+{
+  "name": "calculadora-websocket",
+  "version": "1.0.0",
+  "description": "Ejemplo práctico: Calculadora WebSocket (RFC 6455) implementada sin librerías",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT"
+}
